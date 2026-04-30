@@ -1,0 +1,26 @@
+# Use multi-architecture base image (specify arm64)
+FROM --platform=linux/arm64 python:3.11-slim
+
+# Install necessary build tools and dependencies for PyInstaller
+RUN apt-get update && apt-get install -y \
+    binutils \
+    gcc \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install them
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir pyinstaller
+
+# Copy the rest of the application
+COPY . .
+
+# Run PyInstaller to bundle the application
+# --onefile creates a single executable
+# --name pos_app sets the output binary name
+# --add-data "app/static:app/static" bundles static files
+CMD ["pyinstaller", "--onefile", "--name", "pos_app", "--add-data", "app/static:app/static", "app/main.py"]

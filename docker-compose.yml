@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  pos:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+      - pos_data:/app/data
+volumes:
+  pos_data:
