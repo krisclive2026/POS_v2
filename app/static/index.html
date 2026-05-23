@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>FreshMarket POSV3</title>
     <link rel="stylesheet" href="/static/style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
@@ -118,7 +118,9 @@
                                 <label for="invImage">Image URL</label>
                                 <div class="image-input-row">
                                     <input type="text" id="invImage" required placeholder="/static/images/photo.png">
-                                    <button type="button" id="btnBluetoothPicker" class="bt-btn">📥 Bluetooth</button>
+                                    <button type="button" id="btnBluetoothPicker" class="bt-btn">📡 Bluetooth</button>
+                                    <button type="button" id="btnBrowseImage" class="browse-btn">📂 Browse</button>
+                                    <input type="file" id="fileImagePicker" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
                                 </div>
                             </div>
                             <div class="form-row">
@@ -218,17 +220,7 @@
             </div>
             <div class="modal-body">
                 <div class="receipt-paper">
-                    <h3>=== RECEIPT ===</h3>
-                    <p class="receipt-date" id="receiptDate"></p>
-                    <p class="receipt-id" id="receiptId"></p>
-                    <div class="receipt-divider">--------------------------------</div>
                     <div id="receiptItems" class="receipt-items-list"></div>
-                    <div class="receipt-divider">--------------------------------</div>
-                    <div class="receipt-total-row">
-                        <span>TOTAL:</span>
-                        <span id="receiptTotalAmount"></span>
-                    </div>
-                    <p class="receipt-footer">Thank you for shopping!</p>
                 </div>
             </div>
             <div class="modal-footer">
