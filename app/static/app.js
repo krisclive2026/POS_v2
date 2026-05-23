@@ -1,3 +1,4 @@
+
 let cart = [];
 let inventory = [];
 let categories = [];
@@ -38,14 +39,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btnAddCategory').addEventListener('click', addCategory);
 
     // Bluetooth
-    document.getElementById('btnBluetoothPicker').addEventListener('click', openBluetoothModal);
+    document.getElementById('btnBluetoothPicker').addEventListener('click', openBluetoothReceive);
     document.getElementById('closeBluetoothModalBtn').addEventListener('click', () =>
         document.getElementById('bluetoothModal').classList.add('hidden'));
+
+    // Browse image from file manager
+    const filePicker = document.getElementById('fileImagePicker');
+    document.getElementById('btnBrowseImage').addEventListener('click', () => filePicker.click());
+    filePicker.addEventListener('change', handleBrowseImageSelected);
 
     // Receipt modal
     document.getElementById('closeModalBtn').addEventListener('click', () =>
         document.getElementById('receiptModal').classList.add('hidden'));
-    document.getElementById('printModalBtn').addEventListener('click', () => window.print());
+    document.getElementById('printModalBtn').addEventListener('click', printReceipt);
 
     // MISC quick entry
     document.getElementById('miscToggle').addEventListener('click', () => {
@@ -443,7 +449,7 @@ async function checkout() {
         });
         if (res.ok) {
             const result = await res.json();
-            showReceiptModal(result.sale_id, payload);
+            showReceiptModal(result);
             clearCart();
             loadInventory(); // refresh stock
         } else {
@@ -453,19 +459,96 @@ async function checkout() {
     } catch (e) { console.error(e); alert('An error occurred during checkout'); }
 }
 
-function showReceiptModal(saleId, payload) {
-    document.getElementById('receiptId').textContent = 'Sale ID: #' + saleId;
-    document.getElementById('receiptDate').textContent = new Date().toLocaleString();
+function showReceiptModal(result) {
     const list = document.getElementById('receiptItems');
-    list.innerHTML = '';
-    payload.items.forEach(item => {
-        const row = document.createElement('div');
-        row.className = 'receipt-item-row';
-        row.innerHTML = `<span>${item.name} (x${item.quantity})</span><span>₹${(item.price * item.quantity).toFixed(2)}</span>`;
-        list.appendChild(row);
-    });
-    document.getElementById('receiptTotalAmount').textContent = `₹${payload.total.toFixed(2)}`;
+    const now = new Date().toLocaleString('en-IN');
+
+    list.innerHTML = `
+        <div class="rcpt-banner ${result.printer_ok ? 'rcpt-ok' : 'rcpt-warn'}">
+            ${result.printer_ok ? '🖨️ Printed successfully' : '⚠️ Printer not detected — print manually below'}
+        </div>
+        <div class="rcpt-wrap">
+            <div class="rcpt-header">
+                <div class="rcpt-store">FreshMarket POS</div>
+                <div class="rcpt-sub">CUSTOMER RECEIPT</div>
+                <div class="rcpt-meta">${now}</div>
+                <div class="rcpt-meta">Sale ID: #${result.sale_id}</div>
+            </div>
+            <div class="rcpt-divider"></div>
+            <table class="rcpt-table">
+                <thead>
+                    <tr>
+                        <th class="rcpt-th-name">Item</th>
+                        <th class="rcpt-th-num">Qty</th>
+                        <th class="rcpt-th-num">Price</th>
+                        <th class="rcpt-th-num">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${result.items.map(i => `
+                    <tr>
+                        <td class="rcpt-td-name">${i.name}</td>
+                        <td class="rcpt-td-num">${i.quantity}</td>
+                        <td class="rcpt-td-num">₹${i.price.toFixed(2)}</td>
+                        <td class="rcpt-td-num">₹${(i.price * i.quantity).toFixed(2)}</td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>
+            <div class="rcpt-divider"></div>
+            <div class="rcpt-total-row">
+                <span>TOTAL</span>
+                <span>₹${result.total.toFixed(2)}</span>
+            </div>
+            <div class="rcpt-divider"></div>
+            <div class="rcpt-footer">Thank you for shopping!<br>Please come again 🙂</div>
+        </div>
+    `;
+
+    // Store plain text for printer button
+    list.dataset.receiptText = result.receipt;
     document.getElementById('receiptModal').classList.remove('hidden');
+}
+
+function printReceipt() {
+    const receiptText = document.getElementById('receiptItems').dataset.receiptText || '';
+
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:80mm;height:auto;border:none;';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open();
+    doc.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11pt;
+    line-height: 1.5;
+    color: black;
+    background: white;
+    width: 80mm;
+  }
+  pre {
+    white-space: pre;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11pt;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body><pre>${receiptText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></body>
+</html>`);
+    doc.close();
+
+    iframe.onload = () => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        setTimeout(() => document.body.removeChild(iframe), 1000);
+    };
 }
 
 // ─── Sales History ────────────────────────────────────────────────────────────
@@ -530,7 +613,30 @@ function renderSalesHistory(sales) {
 
 // ─── Bluetooth ────────────────────────────────────────────────────────────────
 
-async function openBluetoothModal() {
+async function openBluetoothReceive() {
+    const btn = document.getElementById('btnBluetoothPicker');
+    const originalText = btn.textContent;
+    btn.textContent = '⏳ Opening...';
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/bluetooth-receive', { method: 'POST' });
+        if (res.ok) {
+            btn.textContent = '📡 Waiting...';
+            setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 3000);
+        } else {
+            const err = await res.json();
+            alert('Could not open Bluetooth receiver:\n' + (err.detail || 'Unknown error'));
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    } catch (e) {
+        alert('Server unreachable.');
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+async function openBluetoothModal_UNUSED() {
     const grid = document.getElementById('bluetoothImagesGrid');
     grid.innerHTML = '<p>Loading...</p>';
     document.getElementById('bluetoothModal').classList.remove('hidden');
@@ -571,3 +677,43 @@ async function claimBluetoothImage(filename) {
         } else { alert('Failed to claim image.'); }
     } catch (e) { console.error(e); }
 }
+
+// ─── Browse Image Upload ───────────────────────────────────────────────────────
+
+async function handleBrowseImageSelected(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const btn = document.getElementById('btnBrowseImage');
+    const originalText = btn.textContent;
+    btn.textContent = '⏳ Uploading...';
+    btn.disabled = true;
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload-image', {
+            method: 'POST',
+            body: formData
+        });
+        if (res.ok) {
+            const data = await res.json();
+            document.getElementById('invImage').value = data.image_url;
+            btn.textContent = '✅ Done';
+            setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 1500);
+        } else {
+            const err = await res.json();
+            alert('Upload failed: ' + (err.detail || 'Unknown error'));
+            btn.textContent = originalText;
+            btn.disabled = false;
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Upload error. Is the server running?');
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+    // Reset input so same file can be re-selected if needed
+    e.target.value = '';
+}
+ 
