@@ -14,33 +14,33 @@ from typing import List, Optional
 import uuid
 from datetime import datetime
 from database import init_db, get_db
-
+ 
 # ─── Pydantic models (defined early so printer functions can reference them) ──
-
+ 
 class Item(BaseModel):
     name: str
     price: float
     quantity: int
-
+ 
 class Cart(BaseModel):
     items: List[Item]
     total: float
-
+ 
 class InventoryItem(BaseModel):
     name: str
     price: float
     image_url: str
     category: Optional[str] = "General"
     stock: Optional[int] = 999
-
+ 
 class CategoryCreate(BaseModel):
     name: str
-
+ 
 class ClaimImageRequest(BaseModel):
     filename: str
-
+ 
 # ─── Printer Setup ────────────────────────────────────────────────────────────
-
+ 
 # ESC/POS commands (matching the proven working implementation)
 ESC_INIT          = b"\x1b@"
 ESC_CUT           = b"\x1dV\x00"
@@ -55,24 +55,64 @@ ESC_NORMAL_SIZE   = b"\x1b!\x00"
 ESC_UNDERLINE_ON  = b"\x1b-\x01"
 ESC_UNDERLINE_OFF = b"\x1b-\x00"
 ESC_FEED_LINES    = lambda n: bytes([0x1b, 0x64, n])
-
+ 
 # Receipt width — 80mm paper on RP3200 Lite fits 42 chars at standard font
 RECEIPT_WIDTH = 42
-
+ 
 STORE_NAME = "FreshMarket POS"
-
-
+ 
+ 
 def _write(h, data: bytes):
     """Helper: write raw bytes to a win32print printer handle."""
     import win32print
     win32print.WritePrinter(h, data)
-
-
+ 
+ 
 def _wline(h, text: str):
     """Encode text as UTF-8 + newline and write to printer handle."""
     _write(h, (text + "\n").encode("utf-8", errors="replace"))
-
-
+ 
+ 
+def _find_thermal_printer_win32() -> str:
+    """
+    Scan all Windows printers and return the best thermal/POS printer name.
+    Priority:
+      1. Any printer whose name contains thermal/pos/receipt/tsp/rp/xp keywords
+      2. Any non-virtual, non-PDF printer as last resort
+    Returns empty string if nothing useful found.
+    """
+    try:
+        import win32print
+        # EnumPrinters(2) returns all local+network printers
+        printers = [p[2] for p in win32print.EnumPrinters(2)]
+    except Exception as e:
+        print(f"[PRINTER] Could not enumerate printers: {e}")
+        return ""
+ 
+    # keywords that strongly suggest a thermal/POS printer
+    thermal_keywords = ("thermal", "pos", "receipt", "tsp", "rp", "xp", "80mm", "58mm", "escpos")
+    # names that are definitely NOT real printers
+    virtual_keywords = ("pdf", "xps", "fax", "onenote", "print to", "microsoft", "adobe")
+ 
+    print(f"[PRINTER] Installed printers: {printers}")
+ 
+    for name in printers:
+        lower = name.lower()
+        if any(k in lower for k in thermal_keywords):
+            print(f"[PRINTER] Matched thermal printer: {name}")
+            return name
+ 
+    # fallback: first non-virtual printer
+    for name in printers:
+        lower = name.lower()
+        if not any(k in lower for k in virtual_keywords):
+            print(f"[PRINTER] No thermal keyword match; using: {name}")
+            return name
+ 
+    print("[PRINTER] All printers appear virtual. Check Windows printer settings.")
+    return ""
+ 
+ 
 def print_thermal_receipt(sale_id: int, cart) -> bool:
     """
     Print a formatted receipt via win32print (Windows spooler / RAW mode).
@@ -90,86 +130,84 @@ def print_thermal_receipt(sale_id: int, cart) -> bool:
     except ImportError:
         print("[PRINTER] win32print not available — falling back to serial.")
         return _print_serial_fallback(sale_id, cart)
-
-    try:
-        # Pick the default Windows printer (user can change it in Windows Settings)
-        printer_name = win32print.GetDefaultPrinter()
-    except Exception as e:
-        print(f"[PRINTER] Could not get default printer: {e}")
+ 
+    printer_name = _find_thermal_printer_win32()
+    if not printer_name:
+        print("[PRINTER] No thermal printer found via win32print — falling back to serial.")
         return _print_serial_fallback(sale_id, cart)
-
+ 
     W = RECEIPT_WIDTH
-
+ 
     try:
         hPrinter = win32print.OpenPrinter(printer_name)
         try:
             win32print.StartDocPrinter(hPrinter, 1, ("FreshMarket Receipt", None, "RAW"))
             win32print.StartPagePrinter(hPrinter)
-
+ 
             # ── Init ──────────────────────────────────────────
             _write(hPrinter, ESC_INIT)
-
+ 
             # ── Store name: centred, bold, double-height ──────
             _write(hPrinter, ESC_ALIGN_CENTER + ESC_BOLD_ON + ESC_DOUBLE_HEIGHT)
             _wline(hPrinter, STORE_NAME)
-
+ 
             # ── Sub-header: normal size ────────────────────────
             _write(hPrinter, ESC_NORMAL_SIZE + ESC_BOLD_OFF + ESC_ALIGN_CENTER)
             _wline(hPrinter, "=" * W)
             _wline(hPrinter, datetime.now().strftime("%d-%m-%Y  %H:%M:%S"))
             _wline(hPrinter, f"Sale ID: #{sale_id}")
             _wline(hPrinter, "-" * W)
-
+ 
             # ── Column header ─────────────────────────────────
             _write(hPrinter, ESC_ALIGN_LEFT + ESC_BOLD_ON)
             _wline(hPrinter, f"{'ITEM':<20} {'QTY':>4} {'PRICE':>7} {'TOTAL':>8}")
             _write(hPrinter, ESC_BOLD_OFF)
             _wline(hPrinter, "-" * W)
-
+ 
             # ── Item lines ────────────────────────────────────
             for item in cart.items:
                 item_total = item.quantity * item.price
                 name = item.name[:20]
                 line = f"{name:<20} {item.quantity:>4} {item.price:>7.2f} {item_total:>8.2f}"
                 _wline(hPrinter, line)
-
+ 
             _wline(hPrinter, "-" * W)
-
+ 
             # ── Total block ───────────────────────────────────
             _write(hPrinter, ESC_ALIGN_LEFT)
             _wline(hPrinter, f"{'SUBTOTAL:':<30} {cart.total:>10.2f}")
             _wline(hPrinter, "=" * W)
-
+ 
             # TOTAL — double-width bold so it stands out
             _write(hPrinter, ESC_BOLD_ON + ESC_DOUBLE_WIDTH)
             _wline(hPrinter, f"TOTAL: Rs:{cart.total:>8.2f}")
             _write(hPrinter, ESC_NORMAL_SIZE + ESC_BOLD_OFF)
             _wline(hPrinter, "=" * W)
-
+ 
             # ── Footer ────────────────────────────────────────
             _write(hPrinter, ESC_ALIGN_CENTER)
             _wline(hPrinter, "")
             _wline(hPrinter, "Thank you for shopping!")
             _wline(hPrinter, "Please come again :)")
             _wline(hPrinter, "")
-
+ 
             # ── Feed + cut ────────────────────────────────────
             _write(hPrinter, ESC_FEED_LINES(4) + ESC_CUT)
-
+ 
             win32print.EndPagePrinter(hPrinter)
             win32print.EndDocPrinter(hPrinter)
-
+ 
         finally:
             win32print.ClosePrinter(hPrinter)
-
+ 
         print(f"[PRINTER] Receipt sent to '{printer_name}' via win32print.")
         return True
-
+ 
     except Exception as e:
         print(f"[PRINTER] win32print error: {e} — trying serial fallback.")
         return _print_serial_fallback(sale_id, cart)
-
-
+ 
+ 
 def _print_serial_fallback(sale_id: int, cart) -> bool:
     """
     Fallback: send receipt over a serial/COM USB port.
@@ -195,8 +233,8 @@ def _print_serial_fallback(sale_id: int, cart) -> bool:
     except Exception as e:
         print(f"[PRINTER] Serial fallback failed on {port}: {e}")
         return False
-
-
+ 
+ 
 def _find_serial_printer() -> str | None:
     """Return the first COM port that looks like a thermal printer."""
     try:
@@ -212,8 +250,8 @@ def _find_serial_printer() -> str | None:
     except Exception:
         pass
     return None
-
-
+ 
+ 
 def _build_receipt_text(sale_id: int, cart) -> str:
     """Plain-text receipt for the serial fallback path."""
     W = RECEIPT_WIDTH
@@ -277,7 +315,7 @@ def read_root():
  
 # ─── Checkout ────────────────────────────────────────────────────────────────
  
-
+ 
 @app.post("/api/checkout")
 def checkout(cart: Cart):
     if not cart.items:
